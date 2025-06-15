@@ -1,3 +1,2 @@
-python-telegram-bot==20.6
-pytesseract
-Pillow
+python-telegram-bot==13.7
+python-dotenv==0.19.0
