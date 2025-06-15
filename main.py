@@ -1,54 +1,96 @@
+import re
+import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from datetime import datetime
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-BOT_TOKEN = "7921805686:AAH0AJrCC0Dd6Lvb5mc3CXI9dUda_n89Y0Y"
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-def parse_mrz(mrz1: str, mrz2: str):
-    try:
-        mrz1 = mrz1.strip().replace('\n', '')
-        mrz2 = mrz2.strip().replace('\n', '')
+# Шаблон для чтения паспортных данных
+PASSPORT_PATTERN = re.compile(
+    r'([A-Z0-9<]+)\s+([A-Z0-9<]+)\s+([A-Z0-9<]+)\s+([A-Z0-9<]+)\s+([A-Z]{3})\s+(\d{2}[A-Z]{3}\d{2})\s+([FM])\s+(\d{2}[A-Z]{3}\d{2})\s+([A-Z<]+)\s+([A-Z<]+)',
+    re.IGNORECASE
+)
 
-        surname_name_raw = mrz1[5:].split('<<')
-        surname = surname_name_raw[0].replace('<', ' ').strip()
-        name = surname_name_raw[1].replace('<', ' ').strip()
-
-        passport_number = mrz2[0:9].replace('<', '')
-        nationality = mrz2[10:13]
-        birth_date_raw = mrz2[13:19]
-        sex = mrz2[20]
-        expiry_date_raw = mrz2[21:27]
-
-        birth_date = datetime.strptime(birth_date_raw, "%y%m%d").strftime("%d%b%y").upper()
-        expiry_date = datetime.strptime(expiry_date_raw, "%y%m%d").strftime("%d%b%y").upper()
-
-        return f"SR DOCS YY HK1-P-{nationality}-{passport_number}-{nationality}-{birth_date}-{sex}-{expiry_date}-{surname.upper()}-{name.upper()}"
-    except:
-        return "⚠️ Не удалось распознать MRZ. Убедитесь, что ввели ровно 2 строки, как в паспорте."
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Привет! Я помогу тебе сгенерировать строку для Amadeus.\n\n"
-        "📸 Просто отправь 2 нижние строки с паспорта (MRZ), например:\n\n"
-        "`P<UZBIBRAGIMOVA<<BARNO<BAKTIYAROVNA<<<<<<`\n"
-        "`FA0421711<8UZB8611292F2907023<<<<<<<<<<<<<<04`\n\n"
-        "И я верну готовую строку, которую можно скопировать.",
-        parse_mode="Markdown"
+def start(update: Update, context: CallbackContext) -> None:
+    user = update.effective_user
+    update.message.reply_markdown_v2(
+        fr'Привет, {user.mention_markdown_v2()}\! Отправьте мне последние две строки паспорта, и я преобразую их в формат AMADEUS\.'
+        '\n\nПример данных паспорта:'
+        '\n```'
+        '\nP<UZBFA0421711<1111111M1111111<<<<<<<<<<<<<<<0'
+        '\nIBRAGIMOVA<<BARNO<BAKTIYAROVNA<<<<<<<<<<<<<<'
+        '\n```'
+        '\n\nЯ верну формат:'
+        '\n`SR DOCS YY HK1-P-UZB-FA0421711-UZB-29NOV86-F-02JUL29-IBRAGIMOVA-BARNO BAKTIYAROVNA`'
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    lines = text.split('\n')
+def process_passport(update: Update, context: CallbackContext) -> None:
+    text = update.message.text
+    
+    # Удаляем лишние пробелы и преобразуем в единый формат
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    if len(lines) < 2:
+        update.message.reply_text('Пожалуйста, отправьте ДВЕ строки паспортных данных.')
+        return
+    
+    # Объединяем две строки для обработки
+    combined = ' '.join(lines[:2])
+    match = PASSPORT_PATTERN.match(combined)
+    
+    if not match:
+        update.message.reply_text(
+            'Не удалось распознать паспортные данные. Пожалуйста, отправьте последние две строки паспорта.\n\n'
+            'Пример правильного формата:\n'
+            'P<UZBFA0421711<1111111M1111111<<<<<<<<<<<<<<<0\n'
+            'IBRAGIMOVA<<BARNO<BAKTIYAROVNA<<<<<<<<<<<<<<'
+        )
+        return
+    
+    try:
+        # Извлекаем данные
+        doc_type = match.group(1)  # P
+        country = match.group(2)   # UZB
+        passport_number = match.group(3)  # FA0421711
+        birth_date = match.group(6)  # 29NOV86
+        gender = match.group(7)  # F/M
+        expiry_date = match.group(8)  # 02JUL29
+        last_name = match.group(9).replace('<', '')  # IBRAGIMOVA
+        first_name = match.group(10).replace('<', ' ').strip()  # BARNO BAKTIYAROVNA
+        
+        # Форматируем в AMADEUS
+        amadeus_format = f"SR DOCS YY HK1-P-{country}-{passport_number}-{country}-{birth_date}-{gender}-{expiry_date}-{last_name}-{first_name}"
+        
+        # Отправляем результат с возможностью копирования
+        update.message.reply_text(
+            f"Формат AMADEUS:\n\n`{amadeus_format}`\n\nВы можете скопировать текст.",
+            parse_mode='MarkdownV2'
+        )
+    except Exception as e:
+        logger.error(f"Error processing passport: {e}")
+        update.message.reply_text('Произошла ошибка при обработке данных. Пожалуйста, проверьте формат и попробуйте снова.')
 
-    if len(lines) == 2 and lines[0].startswith('P<'):
-        result = parse_mrz(lines[0], lines[1])
-        await update.message.reply_text(result)
-    else:
-        await update.message.reply_text("❗Пожалуйста, отправьте 2 строки MRZ подряд, как на паспорте.")
+def error_handler(update: Update, context: CallbackContext):
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    if update and update.message:
+        update.message.reply_text('Произошла ошибка. Пожалуйста, попробуйте позже.')
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+def main():
+    # Используем токен, который вы получили от BotFather
+    updater = Updater("7921805686:AAH0AJrCC0Dd6Lvb5mc3CXI9dUda_n89Y0Y", use_context=True)
+    
+    dispatcher = updater.dispatcher
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, process_passport))
+    dispatcher.add_error_handler(error_handler)
+    
+    updater.start_polling()
+    logger.info("Bot started polling...")
+    updater.idle()
 
-print("🤖 Бот запущен.")
-app.run_polling()
+if __name__ == '__main__':
+    main()
