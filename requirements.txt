@@ -1,4 +1,5 @@
-python-telegram-bot==13.7
-pytesseract==0.3.10
+python-telegram-bot==20.7
+Pillow==10.3.0
+easyocr==1.7.1
 opencv-python-headless==4.9.0.80
-Pillow==10.1.0
+
