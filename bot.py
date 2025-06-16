@@ -1,39 +1,62 @@
 import logging
+import easyocr
+from PIL import Image
+import numpy as np
+import cv2
+from io import BytesIO
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# Включаем логирование
+# Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-logger = logging.getLogger(__name__)
-
-# Токен ТВОЕГО бота
+# Токен твоего бота
 TOKEN = "7921805686:AAH0AJrCC0Dd6Lvb5mc3CXI9dUda_n89Y0Y"
 
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Привет! Отправь мне фото паспорта, и я его распознаю.")
+# EasyOCR reader
+reader = easyocr.Reader(["en"])
 
-# Обработка фото
+# Функция для извлечения MRZ-зоны
+def extract_mrz_text(image):
+    img_array = np.array(image)
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    results = reader.readtext(gray)
+    mrz_lines = []
+
+    for result in results:
+        text = result[1]
+        if len(text) > 30 and all(char.isupper() or char.isdigit() or char in "<>" for char in text):
+            mrz_lines.append(text.strip())
+
+    if len(mrz_lines) >= 2:
+        return "\n".join(mrz_lines[-2:])
+    elif mrz_lines:
+        return mrz_lines[-1]
+    else:
+        return "MRZ-зона не найдена. Попробуйте загрузить фото крупнее и четче."
+
+# Асинхронная функция для обработки сообщений с фото
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Я получил фото! Обработка пока не реализована.")
+    photo_file = await update.message.photo[-1].get_file()
+    photo_bytes = await photo_file.download_as_bytearray()
+    image = Image.open(BytesIO(photo_bytes))
 
-# Обработка ошибок
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="Произошла ошибка:", exc_info=context.error)
+    mrz_text = extract_mrz_text(image)
+
+    await update.message.reply_text(f"Распознанный MRZ:\n{mrz_text}")
 
 # Основная функция запуска бота
-def main() -> None:
+async def main():
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    # Обработка фото
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_error_handler(error_handler)
 
-    print("Бот запущен и готов к работе!")
-    app.run_polling()
+    # Запуск бота
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
